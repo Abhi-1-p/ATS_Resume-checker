@@ -1,0 +1,685 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Users, Plus, ArrowRight, FileText, Cpu, Target, 
+  History, Settings, PieChart, Layers, CheckCircle, 
+  AlertTriangle, Zap, Briefcase, Edit3, Download,
+  Layout, Eye, Trash2, Ghost, Sparkles, ChevronRight,
+  Upload, X
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged, 
+  signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  onSnapshot, 
+  addDoc 
+} from 'firebase/firestore';
+
+/**
+ * FIREBASE CONFIGURATION & INITIALIZATION
+ */
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'resume-intel-v1';
+const apiKey = ""; // Provided by environment
+
+/**
+ * THEMES & STYLING
+ */
+const THEMES = {
+  mint: { 
+    bg: 'bg-[#E0F2F1]', 
+    primary: 'text-emerald-700', 
+    accent: 'bg-emerald-200/50', 
+    border: 'border-emerald-200',
+    gradient: 'from-emerald-50 to-emerald-100'
+  },
+  blush: { 
+    bg: 'bg-[#FFF0F0]', 
+    primary: 'text-rose-700', 
+    accent: 'bg-rose-200/50', 
+    border: 'border-rose-200',
+    gradient: 'from-rose-50 to-rose-100'
+  },
+  powderBlue: { 
+    bg: 'bg-[#E3F2FD]', 
+    primary: 'text-blue-700', 
+    accent: 'bg-blue-200/50', 
+    border: 'border-blue-200',
+    gradient: 'from-blue-50 to-blue-100'
+  }
+};
+
+/**
+ * AI INTEGRATION ENGINE
+ */
+async function callGemini(prompt, systemInstruction = "") {
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        generationConfig: { 
+          responseMimeType: "application/json",
+          temperature: 0.7
+        }
+      })
+    });
+    
+    if (!response.ok) throw new Error('AI processing failed');
+    const data = await response.json();
+    return JSON.parse(data.candidates[0].content.parts[0].text);
+  } catch (error) {
+    console.error("AI Error:", error);
+    return null;
+  }
+}
+
+/**
+ * UI COMPONENT: LOADING
+ */
+const LoadingOverlay = ({ message }) => (
+  <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/60 backdrop-blur-xl">
+    <div className="relative h-20 w-20 mb-6">
+      <div className="absolute inset-0 rounded-full border-4 border-emerald-100 animate-pulse"></div>
+      <div className="absolute inset-0 rounded-full border-t-4 border-emerald-500 animate-spin"></div>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <Cpu className="w-8 h-8 text-emerald-600 animate-pulse" />
+      </div>
+    </div>
+    <p className="text-emerald-900 font-bold tracking-tight text-lg">{message}</p>
+    <p className="text-emerald-600/60 text-sm mt-2">Routing Multi-Model Pipeline...</p>
+  </div>
+);
+
+/**
+ * MAIN APP
+ */
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+  const [view, setView] = useState('gateway');
+  const [subView, setSubView] = useState('analyze');
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Platform State
+  const [resumeText, setResumeText] = useState("");
+  const [jdText, setJdText] = useState("");
+  const [resumeFile, setResumeFile] = useState(null);
+  const [jdFile, setJdFile] = useState(null);
+  const [analysis, setAnalysis] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [config, setConfig] = useState({
+    multiAgent: true,
+    dynamicRouting: true,
+    biasDetection: true,
+    resumeHeatmap: true,
+    recruiterSim: true
+  });
+
+  const resumeInputRef = useRef(null);
+  const jdInputRef = useRef(null);
+
+  // Load PDF.js
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.async = true;
+    document.body.appendChild(script);
+    script.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    };
+  }, []);
+
+  // Auth Lifecycle
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  // Sync Profiles & History
+  useEffect(() => {
+    if (!user) return;
+    const profilesRef = collection(db, 'artifacts', appId, 'users', user.uid, 'profiles');
+    const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+
+    const unsubProfiles = onSnapshot(profilesRef, (snap) => {
+      setProfiles(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubHistory = onSnapshot(historyRef, (snap) => {
+      setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.timestamp - a.timestamp));
+    });
+
+    return () => { unsubProfiles(); unsubHistory(); };
+  }, [user]);
+
+  const extractTextFromPDF = async (file) => {
+    if (!window.pdfjsLib) throw new Error("PDF library not loaded");
+    const reader = new FileReader();
+    return new Promise((resolve, reject) => {
+      reader.onload = async (e) => {
+        try {
+          const typedarray = new Uint8Array(e.target.result);
+          const pdf = await window.pdfjsLib.getDocument(typedarray).promise;
+          let fullText = '';
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            fullText += pageText + '\n';
+          }
+          resolve(fullText);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const handleFileUpload = async (file, type) => {
+    if (!file) return;
+    setIsLoading(true);
+    try {
+      const text = await extractTextFromPDF(file);
+      if (type === 'resume') {
+        setResumeText(text);
+        setResumeFile(file.name);
+      } else {
+        setJdText(text);
+        setJdFile(file.name);
+      }
+    } catch (err) {
+      console.error("PDF extraction error:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const createProfile = async (name, theme) => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'profiles'), {
+        name, theme, createdAt: Date.now(), settings: config
+      });
+    } catch (e) { console.error(e); }
+    setIsLoading(false);
+  };
+
+  const performAnalysis = async () => {
+    if (!resumeText || !jdText || !user) return;
+    setIsLoading(true);
+    
+    const systemPrompt = `You are a Senior Recruiter and ATS Optimization Engine. Analyze the resume against the JD. Output strictly JSON.
+    Schema: {
+      "ats_score": number, 
+      "match_percentage": number,
+      "keyword_gap": string[], 
+      "extracted_data": { 
+        "skills": { "detected": string[], "missing": string[] }, 
+        "work_history": string[] 
+      },
+      "ai_rewrite": { "quantified_bullets": string[] },
+      "recommendations": string[],
+      "bias_report": string[]
+    }`;
+
+    const prompt = `RESUME CONTENT:\n${resumeText}\n\nTARGET JOB DESCRIPTION:\n${jdText}`;
+    const result = await callGemini(prompt, systemPrompt);
+    
+    if (result) {
+      setAnalysis(result);
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+        timestamp: Date.now(),
+        profileId: currentProfile.id,
+        resumeSnippet: resumeText.substring(0, 100),
+        jdSnippet: jdText.substring(0, 100),
+        score: result.ats_score,
+        analysis: result
+      });
+    }
+    setIsLoading(false);
+  };
+
+  /**
+   * UI: GATEWAY
+   */
+  const Gateway = () => {
+    const [isCreating, setIsCreating] = useState(false);
+    const [newName, setNewName] = useState("");
+    const [selectedTheme, setSelectedTheme] = useState("mint");
+
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6">
+        <div className="w-full max-w-5xl">
+          <header className="text-center mb-16">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 text-xs font-bold mb-4 uppercase tracking-widest">
+              <Zap size={14} /> Production Intelligence v2.0
+            </div>
+            <h1 className="text-5xl font-black text-slate-900 tracking-tight">Intelligence Gateway</h1>
+            <p className="text-slate-500 mt-4 text-lg">Select a profile to access your multi-model resume dashboard.</p>
+          </header>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            {profiles.map(p => (
+              <button 
+                key={p.id}
+                onClick={() => { setCurrentProfile(p); setView('dashboard'); }}
+                className="group flex flex-col items-center p-8 bg-white border border-slate-100 rounded-[32px] shadow-sm hover:shadow-xl hover:-translate-y-2 transition-all duration-300"
+              >
+                <div className={`w-24 h-24 rounded-full ${THEMES[p.theme].bg} border-4 ${THEMES[p.theme].border} flex items-center justify-center mb-6 transition-transform group-hover:scale-110`}>
+                  <Users className={`w-10 h-10 ${THEMES[p.theme].primary}`} />
+                </div>
+                <h3 className="font-bold text-slate-800 text-xl">{p.name}</h3>
+                <span className="text-[10px] font-black uppercase text-slate-400 mt-1 tracking-widest">{p.theme} mode</span>
+              </button>
+            ))}
+
+            <button 
+              onClick={() => setIsCreating(true)}
+              className="group flex flex-col items-center p-8 border-4 border-dashed border-slate-100 rounded-[32px] hover:border-emerald-200 hover:bg-emerald-50/30 transition-all duration-300"
+            >
+              <div className="w-24 h-24 rounded-full bg-slate-50 flex items-center justify-center mb-6 group-hover:bg-emerald-100">
+                <Plus className="w-10 h-10 text-slate-300 group-hover:text-emerald-500" />
+              </div>
+              <h3 className="font-bold text-slate-400 group-hover:text-emerald-600">Add Profile</h3>
+            </button>
+          </div>
+
+          {isCreating && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md flex items-center justify-center z-50 p-4">
+              <div className="bg-white w-full max-w-md rounded-[40px] shadow-2xl p-10 overflow-hidden relative">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16 blur-3xl opacity-50" />
+                <h2 className="text-2xl font-black text-slate-900 mb-8">Initialize Profile</h2>
+                <div className="space-y-6">
+                  <div>
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 block">Full Name</label>
+                    <input 
+                      className="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium"
+                      placeholder="e.g. Alex Chen"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 block">Interface Theme</label>
+                    <div className="flex gap-4">
+                      {Object.keys(THEMES).map(t => (
+                        <button
+                          key={t}
+                          onClick={() => setSelectedTheme(t)}
+                          className={`w-12 h-12 rounded-full border-4 transition-all ${THEMES[t].bg} ${selectedTheme === t ? 'border-slate-900 scale-110' : 'border-transparent'}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-4 pt-4">
+                    <button onClick={() => setIsCreating(false)} className="flex-1 py-4 font-bold text-slate-400">Cancel</button>
+                    <button 
+                      onClick={() => { createProfile(newName, selectedTheme); setIsCreating(false); }}
+                      className="flex-1 bg-slate-900 text-white rounded-2xl font-bold py-4 shadow-xl hover:bg-emerald-600 transition-all"
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  /**
+   * DASHBOARD COMPONENTS
+   */
+  const Sidebar = () => (
+    <aside className="w-72 fixed left-0 top-0 h-screen bg-white/40 backdrop-blur-2xl border-r border-slate-200/50 flex flex-col z-40">
+      <div className="p-8">
+        <div className="flex items-center gap-3 mb-10">
+          <div className={`p-2 rounded-xl ${THEMES[currentProfile.theme].bg}`}>
+            <Cpu className={`w-6 h-6 ${THEMES[currentProfile.theme].primary}`} />
+          </div>
+          <span className="font-black text-xl text-slate-900 tracking-tighter">Resume Intel</span>
+        </div>
+
+        <nav className="space-y-2">
+          <SidebarLink icon={<Layout />} label="Analyze" active={subView === 'analyze'} onClick={() => setSubView('analyze')} theme={currentProfile.theme} />
+          <SidebarLink icon={<History />} label="History" active={subView === 'history'} onClick={() => setSubView('history')} theme={currentProfile.theme} />
+          <SidebarLink icon={<PieChart />} label="Dashboard" active={subView === 'dash'} onClick={() => setSubView('dash')} theme={currentProfile.theme} />
+          <SidebarLink icon={<Settings />} label="Control Panel" active={subView === 'settings'} onClick={() => setSubView('settings')} theme={currentProfile.theme} />
+        </nav>
+      </div>
+
+      <div className="mt-auto p-8">
+        <div className={`p-4 rounded-3xl ${THEMES[currentProfile.theme].bg} border border-white flex items-center gap-4`}>
+          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-sm">
+            <Users className={`w-5 h-5 ${THEMES[currentProfile.theme].primary}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-black text-slate-900 truncate">{currentProfile.name}</p>
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Profile</p>
+          </div>
+          <button onClick={() => setView('gateway')} className="p-2 hover:bg-white/50 rounded-lg transition-colors">
+            <Ghost size={16} className="text-slate-400" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+
+  const SidebarLink = ({ icon, label, active, onClick, theme }) => (
+    <button 
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-2xl transition-all duration-300 group ${active ? `${THEMES[theme].bg} ${THEMES[theme].primary} font-bold shadow-sm` : 'text-slate-500 hover:bg-slate-50'}`}
+    >
+      {React.cloneElement(icon, { size: 18, strokeWidth: active ? 2.5 : 2 })}
+      <span className="text-sm tracking-tight">{label}</span>
+      {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-current" />}
+    </button>
+  );
+
+  const AnalysisSection = () => (
+    <div className="space-y-10 animate-in slide-in-from-bottom-4 duration-700">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+        {/* Resume Area */}
+        <div className="bg-white/70 backdrop-blur-md rounded-[32px] border border-slate-200/50 p-8 shadow-sm group relative">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-emerald-50 rounded-xl">
+                <FileText className="text-emerald-500" size={20} />
+              </div>
+              <h3 className="font-black text-slate-900 tracking-tight">Source Intelligence</h3>
+            </div>
+            <button 
+              onClick={() => resumeInputRef.current?.click()}
+              className="flex items-center gap-2 text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-full hover:bg-emerald-100 transition-colors"
+            >
+              <Upload size={12} /> Upload PDF
+            </button>
+            <input 
+              type="file" 
+              ref={resumeInputRef} 
+              className="hidden" 
+              accept="application/pdf" 
+              onChange={(e) => handleFileUpload(e.target.files[0], 'resume')} 
+            />
+          </div>
+
+          {resumeFile && (
+            <div className="mb-4 flex items-center justify-between bg-emerald-50/50 px-4 py-2 rounded-xl border border-emerald-100">
+              <span className="text-xs font-bold text-emerald-700 truncate max-w-[80%] flex items-center gap-2">
+                <CheckCircle size={14} /> {resumeFile}
+              </span>
+              <button onClick={() => { setResumeFile(null); setResumeText(""); }} className="text-emerald-400 hover:text-emerald-600">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          <textarea 
+            className="w-full h-80 bg-slate-50/50 rounded-2xl p-6 text-sm leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all border border-slate-100"
+            placeholder="Paste raw resume text or upload PDF to extract intelligence..."
+            value={resumeText}
+            onChange={(e) => setResumeText(e.target.value)}
+          />
+        </div>
+
+        {/* JD Area */}
+        <div className="bg-white/70 backdrop-blur-md rounded-[32px] border border-slate-200/50 p-8 shadow-sm group relative">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-50 rounded-xl">
+                <Briefcase className="text-blue-500" size={20} />
+              </div>
+              <h3 className="font-black text-slate-900 tracking-tight">Market Target (JD)</h3>
+            </div>
+            <button 
+              onClick={() => jdInputRef.current?.click()}
+              className="flex items-center gap-2 text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors"
+            >
+              <Upload size={12} /> Upload PDF
+            </button>
+            <input 
+              type="file" 
+              ref={jdInputRef} 
+              className="hidden" 
+              accept="application/pdf" 
+              onChange={(e) => handleFileUpload(e.target.files[0], 'jd')} 
+            />
+          </div>
+
+          {jdFile && (
+            <div className="mb-4 flex items-center justify-between bg-blue-50/50 px-4 py-2 rounded-xl border border-blue-100">
+              <span className="text-xs font-bold text-blue-700 truncate max-w-[80%] flex items-center gap-2">
+                <CheckCircle size={14} /> {jdFile}
+              </span>
+              <button onClick={() => { setJdFile(null); setJdText(""); }} className="text-blue-400 hover:text-blue-600">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          <textarea 
+            className="w-full h-80 bg-slate-50/50 rounded-2xl p-6 text-sm leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 transition-all border border-slate-100"
+            placeholder="Paste target job description or upload PDF to begin differential analysis..."
+            value={jdText}
+            onChange={(e) => setJdText(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-center">
+        <button 
+          onClick={performAnalysis}
+          disabled={!resumeText || !jdText}
+          className="group relative flex items-center gap-4 px-12 py-5 bg-slate-900 text-white rounded-[24px] font-black text-lg shadow-2xl hover:bg-emerald-600 hover:-translate-y-1 transition-all disabled:opacity-20 disabled:translate-y-0"
+        >
+          <Sparkles className="text-amber-400" />
+          Synchronize Intelligence
+          <ArrowRight className="group-hover:translate-x-2 transition-transform" />
+        </button>
+      </div>
+
+      {analysis && (
+        <div className="space-y-8 mt-12 animate-in fade-in duration-1000">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <ResultCard label="ATS Score" value={`${analysis.ats_score}%`} icon={<Zap />} color="emerald" />
+            <ResultCard label="JD Alignment" value={`${analysis.match_percentage}%`} icon={<Target />} color="blue" />
+            <ResultCard label="Skill Gaps" value={analysis.extracted_data.skills.missing.length} icon={<AlertTriangle />} color="rose" />
+            <ResultCard label="AI Suggs" value={analysis.recommendations.length} icon={<Edit3 />} color="amber" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 bg-white/70 backdrop-blur-md rounded-[40px] border border-slate-200/50 p-10">
+              <h4 className="text-xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                <Layers size={24} className="text-emerald-500" />
+                Targeted Experience Rewriting
+              </h4>
+              <div className="space-y-4">
+                {analysis.ai_rewrite.quantified_bullets.map((bullet, idx) => (
+                  <div key={idx} className="p-6 bg-slate-50 rounded-2xl border border-slate-100 relative group">
+                    <p className="text-sm font-medium text-slate-700 leading-relaxed pr-8">"{bullet}"</p>
+                    <button className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white rounded-xl shadow-sm opacity-0 group-hover:opacity-100 transition-all hover:text-emerald-600">
+                      <Download size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-8">
+              <div className="bg-white/70 backdrop-blur-md rounded-[40px] border border-slate-200/50 p-8">
+                <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Strategic Missing Keywords</h4>
+                <div className="flex flex-wrap gap-2">
+                  {analysis.extracted_data.skills.missing.map((skill, idx) => (
+                    <span key={idx} className="px-3 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-[10px] font-black border border-rose-100">
+                      + {skill}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-900 rounded-[40px] p-8 text-white">
+                <h4 className="text-xs font-black text-emerald-400 uppercase tracking-widest mb-6">Recruiter Insights</h4>
+                <div className="space-y-4">
+                  {analysis.recommendations.map((rec, idx) => (
+                    <div key={idx} className="flex gap-4">
+                      <CheckCircle size={16} className="text-emerald-500 flex-shrink-0 mt-0.5" />
+                      <p className="text-xs font-medium text-slate-300 leading-relaxed">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const ResultCard = ({ label, value, icon, color }) => {
+    const colors = {
+      emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
+      blue: "bg-blue-50 text-blue-600 border-blue-100",
+      rose: "bg-rose-50 text-rose-600 border-rose-100",
+      amber: "bg-amber-50 text-amber-600 border-amber-100"
+    };
+    return (
+      <div className={`p-6 rounded-[32px] bg-white border border-slate-200/60 shadow-sm flex flex-col items-center text-center transition-all hover:scale-105`}>
+        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 ${colors[color]}`}>
+          {React.cloneElement(icon, { size: 24 })}
+        </div>
+        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</span>
+        <span className="text-3xl font-black text-slate-900 tracking-tighter">{value}</span>
+      </div>
+    );
+  };
+
+  const HistorySection = () => (
+    <div className="max-w-4xl mx-auto py-10 animate-in fade-in duration-500">
+      <div className="flex items-center justify-between mb-10">
+        <div>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight">Intelligence History</h2>
+          <p className="text-slate-500">Managing {history.length} analysis snapshots</p>
+        </div>
+        <button className="px-6 py-3 bg-white border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center gap-2">
+          <Download size={16} /> Archive All
+        </button>
+      </div>
+
+      <div className="space-y-4">
+        {history.filter(h => h.profileId === currentProfile.id).map((h) => (
+          <div key={h.id} className="group flex items-center gap-6 p-6 bg-white/70 backdrop-blur-md rounded-[32px] border border-slate-200/50 hover:shadow-xl hover:translate-x-1 transition-all cursor-pointer">
+            <div className={`w-16 h-16 rounded-[24px] flex flex-col items-center justify-center font-black ${h.score > 75 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+              <span className="text-[9px] uppercase opacity-50">Score</span>
+              <span className="text-xl leading-none">{h.score}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-slate-800 truncate block max-w-[200px]">{h.resumeSnippet}...</span>
+                <ChevronRight size={14} className="text-slate-300" />
+                <span className="font-medium text-slate-400 truncate block max-w-[200px]">{h.jdSnippet}...</span>
+              </div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <History size={10} /> {new Date(h.timestamp).toLocaleString()}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button className="p-3 bg-slate-50 rounded-xl text-slate-400 hover:text-emerald-500 transition-all"><Eye size={18}/></button>
+              <button className="p-3 bg-slate-50 rounded-xl text-slate-400 hover:text-rose-500 transition-all"><Trash2 size={18}/></button>
+            </div>
+          </div>
+        ))}
+        {history.length === 0 && (
+          <div className="py-32 text-center bg-slate-50 rounded-[40px] border-4 border-dashed border-slate-100">
+            <Ghost className="mx-auto text-slate-200 mb-6" size={64} />
+            <p className="text-slate-400 font-bold">No intelligence history recorded yet.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  /**
+   * RENDER
+   */
+  if (view === 'gateway') return <Gateway />;
+
+  return (
+    <div className={`min-h-screen ${THEMES[currentProfile.theme].bg} font-sans flex text-slate-900 selection:bg-emerald-100`}>
+      {isLoading && <LoadingOverlay message="AI Engines Orchestrating..." />}
+      
+      <Sidebar />
+
+      <main className="flex-1 ml-72 p-12 overflow-y-auto">
+        <header className="flex items-center justify-between mb-16">
+          <div>
+            <h1 className="text-4xl font-black tracking-tight text-slate-900">
+              {subView === 'analyze' && 'Platform Intelligence'}
+              {subView === 'history' && 'Version History'}
+              {subView === 'dash' && 'Performance Cloud'}
+              {subView === 'settings' && 'Control Panel'}
+            </h1>
+            <p className="text-slate-500 mt-2 font-medium">Monitoring multi-agent pipeline status...</p>
+          </div>
+          <div className="flex gap-4">
+             <div className="px-5 py-2.5 bg-white/60 backdrop-blur-md border border-slate-200 rounded-[20px] flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Pipeline: Optimized</span>
+             </div>
+             <button className="p-3.5 bg-white/60 backdrop-blur-md border border-slate-200 rounded-[20px] text-slate-600 hover:text-slate-900 hover:scale-110 transition-all">
+                <Download size={20} />
+             </button>
+          </div>
+        </header>
+
+        {subView === 'analyze' && <AnalysisSection />}
+        {subView === 'history' && <HistorySection />}
+        {subView === 'dash' && <div className="py-40 text-center text-slate-400 italic font-bold">Visualization Engine Initializing...</div>}
+        {subView === 'settings' && (
+          <div className="max-w-2xl mx-auto py-10">
+            <h3 className="text-2xl font-black mb-8">Platform Configuration</h3>
+            <div className="bg-white/70 backdrop-blur-md rounded-[40px] p-10 border border-slate-200 space-y-8">
+              {Object.entries(config).map(([key, val]) => (
+                <div key={key} className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-800 capitalize">{key.replace(/([A-Z])/g, ' $1')}</h4>
+                    <p className="text-xs text-slate-500">Toggle specific AI sub-routines for this profile.</p>
+                  </div>
+                  <button 
+                    onClick={() => setConfig({...config, [key]: !val})}
+                    className={`w-14 h-8 rounded-full transition-all relative ${val ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                  >
+                    <div className={`absolute top-1 w-6 h-6 rounded-full bg-white shadow-sm transition-all ${val ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
